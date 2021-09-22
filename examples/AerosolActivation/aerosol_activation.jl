@@ -54,6 +54,9 @@ import CloudMicrophysics
 const AM = CloudMicrophysics.AerosolModel
 const AA = CloudMicrophysics.AerosolActivation
 
+import Thermodynamics
+const TD = Thermodynamics
+
 # Next, we provide the information about the priors of the parameters we want to learn.
 # We are calibrating two parameters decribing the aerosol properties -
 # namely the aerosol molar mass and the osmotic coefficient.
@@ -84,11 +87,15 @@ distributions = [d1, d2]
 priors = EKP.ParameterDistributionStorage.ParameterDistribution(distributions, constraints, parameter_names);
 
 # Next we define the atmospheric conditions for which the calibration will take place,
-# (air temperature in K, air pressure in Pa vertical velocity in m/s)
+# (air temperature in K, air pressure in Pa vertical velocity in m/s
+# and vapor specific humidity assuming its saturated in kg/kg)
 # This can be changed later to include more than one (T,p,w) combination in the calibartion process
 T = 283.15
 p = 100000.0
 w = 5.0
+p_vs = TD.saturation_vapor_pressure(param_set, T, TD.Liquid())
+q_vs = 1 / (1 - CP.Planet.molmass_ratio(param_set) * (p_vs - p) / p_vs)
+q = TD.PhasePartition(q_vs, 0.0, 0.0)
 
 # We also define the aerosol size distribution (lognormal, 1 mode)
 # with (mean radius in m, geometric stdev, number concentration 1/m3).
@@ -122,8 +129,8 @@ function run_activation_model(molar_mass_calibrated, osmotic_coeff_calibrated)
     )
 
     aerosol_distr = AM.AerosolDistribution((accum_mode_seasalt,))
-    N_act = AA.total_N_activated(param_set, aerosol_distr, T, p, w)
-    M_act = AA.total_M_activated(param_set, aerosol_distr, T, p, w)
+    N_act = AA.total_N_activated(param_set, aerosol_distr, T, p, w, q)
+    M_act = AA.total_M_activated(param_set, aerosol_distr, T, p, w, q)
     return [N_act, M_act]
 end
 

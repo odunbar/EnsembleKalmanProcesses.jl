@@ -63,8 +63,8 @@ function update_ensemble!(
 
     # u: N_par × N_ens 
     # g: N_obs × N_ens
-    u = copy(get_u_final(ekp))
-    u_old = copy(u)
+    u = deepcopy(get_u_final(ekp))
+    u_old = deepcopy(u)
     N_obs = size(g, 1)
    
     cov_init = cov(u, dims=2)
@@ -111,13 +111,18 @@ function update_ensemble!(
         cov_gg_succ = cov(g_succ, g_succ, dims=2, corrected=false)
         
         tmp = (cov_gg_succ + scaled_obs_noise_cov) \ (y_succ - g_succ)
-        
         u[:,successful_particles] += (cov_ug_succ * tmp) # [N_par × N_ens]
         
         cov_u_new = cov(u[:,successful_particles],u[:,successful_particles], dims=2)
-        inv_cov_change = cov_init \ cov_u_new 
-        
-        u[:,failed_particles] =  mean(u[:,successful_particles]) .+ inv_cov_change*(u_old[:,failed_particles] .- mean(u_old,dims=2))
+        #inv_cov_change = cov_init \ cov_u_new
+
+        #given that the param space is not too large these operations are fine
+        #get sqrt(cov_u_new)
+        eval_new,evec_new = eigen(cov_u_new)
+        sqrtcov_new = evec_new*Diagonal(sqrt.(eval_new))*evec_new'
+        eval_init,evec_init = eigen(cov_init)
+        invsqrtcov_init = evec_init*Diagonal(sqrt.(eval_init))*evec_init'
+        u[:,failed_particles] =  mean(u[:,successful_particles]) .+ sqrtcov_new*invsqrtcov_init*(u_old[:,failed_particles] .- mean(u_old,dims=2))
         
     end
         

@@ -63,12 +63,13 @@ function update_ensemble!(
 
     # u: N_par × N_ens 
     # g: N_obs × N_ens
-    u = get_u_final(ekp)
+    u = copy(get_u_final(ekp))
+    u_old = copy(u)
     N_obs = size(g, 1)
-
-    cov_init = cov(u, dims = 2)
-    cov_ug = cov(u, g, dims = 2, corrected = false) # [N_par × N_obs]
-    cov_gg = cov(g, g, dims = 2, corrected = false) # [N_obs × N_obs]
+   
+    cov_init = cov(u, dims=2)
+    cov_ug = cov(u,g, dims = 2, corrected=false) # [N_par × N_obs]
+    cov_gg = cov(g,g, dims = 2, corrected=false) # [N_obs × N_obs]
 
     if !isnothing(Δt_new)
         push!(ekp.Δt, Δt_new)
@@ -77,7 +78,7 @@ function update_ensemble!(
     else
         push!(ekp.Δt, ekp.Δt[end])
     end
-
+    
     # Scale noise using Δt
     scaled_obs_noise_cov = ekp.obs_noise_cov / ekp.Δt[end]
     noise = rand(MvNormal(zeros(N_obs), scaled_obs_noise_cov), ekp.N_ens)
@@ -86,11 +87,40 @@ function update_ensemble!(
     # G is deterministic
     y = deterministic_forward_map ? (ekp.obs_mean .+ noise) : (ekp.obs_mean .+ zero(noise))
 
-    # N_obs × N_obs \ [N_obs × N_ens]
-    # --> tmp is [N_obs × N_ens]
-    tmp = (cov_gg + scaled_obs_noise_cov) \ (y - g)
-    u += (cov_ug * tmp) # [N_par × N_ens]
+    #batch particle failures
+    failed_particles = [i for i = 1:size(g,2) if isnan(g[1,i])]
+    if length(failed_particles) == 0
+        # N_obs × N_obs \ [N_obs × N_ens]
+        # --> tmp is [N_obs × N_ens]
+        tmp = (cov_gg + scaled_obs_noise_cov) \ (y - g)
+        u += (cov_ug * tmp) # [N_par × N_ens]
+    else
 
+        successful_particles = filter(x-> !(x in failed_particles), collect(1:size(g,2)))
+        u_succ = u[:,successful_particles]
+        g_succ = g[:,successful_particles]
+        y_succ = y[:,successful_particles]
+
+        if length(failed_particles) > length(successful_particles)
+            @warn string("More than 50% of runs produced NaN.",
+                         "\nIterating... \nbut consider increasing model stability.",
+                         "\nThis will effect optimization result.")
+        end
+        #update successful ones
+        cov_ug_succ = cov(u_succ, g_succ, dims=2, corrected=false)
+        cov_gg_succ = cov(g_succ, g_succ, dims=2, corrected=false)
+        
+        tmp = (cov_gg_succ + scaled_obs_noise_cov) \ (y_succ - g_succ)
+        
+        u[:,successful_particles] += (cov_ug_succ * tmp) # [N_par × N_ens]
+        
+        cov_u_new = cov(u[:,successful_particles],u[:,successful_particles], dims=2)
+        inv_cov_change = cov_init \ cov_u_new 
+        
+        u[:,failed_particles] =  mean(u[:,successful_particles]) .+ inv_cov_change*(u_old[:,failed_particles] .- mean(u_old,dims=2))
+        
+    end
+        
     # store new parameters (and model outputs)
     push!(ekp.u, DataContainer(u, data_are_columns = true))
     push!(ekp.g, DataContainer(g, data_are_columns = true))

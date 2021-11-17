@@ -19,10 +19,10 @@ using
 # G₁(u) = \|u - u_*\| ,
 # ```
 # where ``u`` is a 2-vector of parameters and ``u_*`` is given; here ``u_* = (-1, 1)``. 
-u_min = [0.05, 0.05] #minimizer is 0,0
+u_min = [0.2, 0.05] #minimizer is 0,0
 function G₁(u)
 
-    if (u[1]>0) && (u[2] > 0)
+    if (u[1]>=0) && (u[2] >=0)
         return sqrt((u[1]-u_min[1])^2 + (u[2]-u_min[2])^2)
     else 
         return NaN
@@ -35,7 +35,7 @@ Random.seed!(rng_seed)
 
 # We set a stabilization level, which can aid the algorithm convergence
 dim_output = 1
-stabilization_level = 1e-3
+stabilization_level = 1e-4
 Γ_stabilization = stabilization_level * Matrix(I, dim_output, dim_output) 
 
 # The functional is positive so to minimize it we may set the target to be 0,
@@ -56,7 +56,7 @@ prior = ParameterDistribution(prior_distributions, constraints, parameter_names)
 # ### Calibration
 #
 # We choose the number of ensemble members and the number of iterations of the algorithm
-N_ensemble   = 40
+N_ensemble   = 30
 N_iterations = 10
 nothing # hide
 
@@ -105,8 +105,8 @@ anim_unique_minimum = @animate for i in 1:N_iterations
     
     plot!(u_i_succ[1, :], u_i_succ[2, :],
              seriestype = :scatter,
-                  xlims = extrema(u_init[1, :]/2),
-                  ylims = extrema(u_init[2, :]/2),
+                  xlims = extrema(u_init[1, :]),
+                  ylims = extrema(u_init[2, :]),
                  xlabel = "u₁",
                  ylabel = "u₂",
              markersize = 5,
@@ -117,8 +117,8 @@ anim_unique_minimum = @animate for i in 1:N_iterations
           )
         plot!(u_i_fail[1, :], u_i_fail[2, :],
              seriestype = :scatter,
-                  xlims = extrema(u_init[1, :]/2),
-                  ylims = extrema(u_init[2, :]/2),
+                  xlims = extrema(u_init[1, :]),
+                  ylims = extrema(u_init[2, :]),
              markersize = 5,
             markeralpha = 0.6,
               markercolor = :red,

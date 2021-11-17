@@ -42,6 +42,57 @@ function find_ekp_stepsize(
 end
 
 """
+     split_indices_by_success(output)
+
+Obtain the successful/failed particle split. Failure, if any isnan present in the output along dimension 1.
+"""
+function split_indices_by_success(output)
+    failed_ens = [i for i = 1:size(output,2) if any(isnan.(output[:,i]))]
+    successful_ens = filter(x-> !(x in failed_ens), collect(1:size(output,2)))
+    if length(failed_ens) > length(successful_ens)
+            @warn string("More than 50% of runs produced NaN.",
+                         "\nIterating... \nbut consider increasing model stability.",
+                         "\nThis will effect optimization result.")
+        end
+       
+    return successful_ens, failed_ens
+end
+
+function update_successful_ens(u,g,y,obs_noise_cov)
+    #update successful ones
+    cov_ug = cov(u, g, dims=2, corrected=false)
+    cov_gg = cov(g, g, dims=2, corrected=false)
+    
+    tmp = (cov_gg + obs_noise_cov) \ (y - g)
+    return u + (cov_ug * tmp) # [N_par × N_ens]    
+end
+
+function update_failed_ens(u_old_fail, u_succ,fail_method)
+    
+        if fail_method == "shift"
+            cov_u_new = cov(u_succ,u_succ, dims=2)
+            #given that the param space is not too large these operations are fine, otherwise solve linear systems
+            #get sqrt(cov_u_new)
+            eval_new,evec_new = eigen(cov_u_new)
+            sqrtcov_new = evec_new*Diagonal(sqrt.(eval_new))*evec_new'
+            eval_init,evec_init = eigen(cov_init)
+            invsqrtcov_init = evec_init*Diagonal(sqrt.(eval_init))*evec_init'
+            
+            return mean(u_succ) .+ sqrtcov_new*invsqrtcov_init*(u_old_fail .- mean(u_old,dims=2))
+        elseif fail_method == "sample_succ_gauss"
+            
+            cov_u_new = cov(u_succ,u_succ, dims=2)
+            mean_u_new = mean(u_succ,dims=2)
+
+            return rand(MvNormal(mean_u_new[:],cov_u_new),size(u_old_fail,2))
+        end
+
+end
+
+
+
+
+"""
     update_ensemble!(ekp::EnsembleKalmanProcess{FT, IT, <:Inversion}, g::Array{FT,2} cov_threshold::FT=0.01, Δt_new=nothing) where {FT, IT}
 
 Updates the ensemble according to which type of Process we have. Model outputs `g` need to be a `N_obs × N_ens` array (i.e data are columms).
@@ -52,6 +103,7 @@ function update_ensemble!(
     cov_threshold::FT = 0.01,
     Δt_new = nothing,
     deterministic_forward_map = true,
+    fail_method="sample_succ_gauss"
 ) where {FT, IT}
 
     # Update follows eqns. (4) and (5) of Schillings and Stuart (2017)
@@ -60,6 +112,9 @@ function update_ensemble!(
     if !(size(g)[2] == ekp.N_ens)
         throw(DimensionMismatch("ensemble size in EnsembleKalmanProcess and g do not match, try transposing g or check ensemble size"))
     end
+
+    #get successes and failures
+    successful_ens, failed_ens = split_indices_by_success(g)
 
     # u: N_par × N_ens 
     # g: N_obs × N_ens
@@ -88,41 +143,31 @@ function update_ensemble!(
     y = deterministic_forward_map ? (ekp.obs_mean .+ noise) : (ekp.obs_mean .+ zero(noise))
 
     #batch particle failures
-    failed_particles = [i for i = 1:size(g,2) if isnan(g[1,i])]
-    if length(failed_particles) == 0
+    
+    if length(failed_ens) == 0
         # N_obs × N_obs \ [N_obs × N_ens]
         # --> tmp is [N_obs × N_ens]
         tmp = (cov_gg + scaled_obs_noise_cov) \ (y - g)
         u += (cov_ug * tmp) # [N_par × N_ens]
     else
-
-        successful_particles = filter(x-> !(x in failed_particles), collect(1:size(g,2)))
-        u_succ = u[:,successful_particles]
-        g_succ = g[:,successful_particles]
-        y_succ = y[:,successful_particles]
-
-        if length(failed_particles) > length(successful_particles)
-            @warn string("More than 50% of runs produced NaN.",
-                         "\nIterating... \nbut consider increasing model stability.",
-                         "\nThis will effect optimization result.")
-        end
-        #update successful ones
-        cov_ug_succ = cov(u_succ, g_succ, dims=2, corrected=false)
-        cov_gg_succ = cov(g_succ, g_succ, dims=2, corrected=false)
         
-        tmp = (cov_gg_succ + scaled_obs_noise_cov) \ (y_succ - g_succ)
-        u[:,successful_particles] += (cov_ug_succ * tmp) # [N_par × N_ens]
-        
-        cov_u_new = cov(u[:,successful_particles],u[:,successful_particles], dims=2)
-        #inv_cov_change = cov_init \ cov_u_new
+        u[:,successful_ens] = update_successful_ens(
+            u[:,successful_ens],
+            g[:,successful_ens],
+            y[:,successful_ens],
+            scaled_obs_noise_cov)
 
-        #given that the param space is not too large these operations are fine
-        #get sqrt(cov_u_new)
-        eval_new,evec_new = eigen(cov_u_new)
-        sqrtcov_new = evec_new*Diagonal(sqrt.(eval_new))*evec_new'
-        eval_init,evec_init = eigen(cov_init)
-        invsqrtcov_init = evec_init*Diagonal(sqrt.(eval_init))*evec_init'
-        u[:,failed_particles] =  mean(u[:,successful_particles]) .+ sqrtcov_new*invsqrtcov_init*(u_old[:,failed_particles] .- mean(u_old,dims=2))
+        
+        u[:,failed_ens] = update_failed_ens(
+            u[:,failed_ens],       # NB: at t^n
+            u[:,successful_ens],   # NB: at t^{n+1}
+            fail_method)
+
+        
+        
+        println("successful mean: ", mean(u[:,successful_ens],dims=2))
+        println("failed mean: ", mean(u[:,failed_ens],dims=2))
+        println("overall mean: ", mean(u,dims=2))
         
     end
         

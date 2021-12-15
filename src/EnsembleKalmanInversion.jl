@@ -90,8 +90,6 @@ function update_failed_ens(u_old_fail, u_succ,fail_method)
 end
 
 
-
-
 """
     update_ensemble!(ekp::EnsembleKalmanProcess{FT, IT, <:Inversion}, g::Array{FT,2} cov_threshold::FT=0.01, Δt_new=nothing) where {FT, IT}
 
@@ -161,15 +159,18 @@ function update_ensemble!(
         u[:,failed_ens] = update_failed_ens(
             u[:,failed_ens],       # NB: at t^n
             u[:,successful_ens],   # NB: at t^{n+1}
-            fail_method)
-
-        
+            fail_method)     
         
         println("successful mean: ", mean(u[:,successful_ens],dims=2))
         println("failed mean: ", mean(u[:,failed_ens],dims=2))
         println("overall mean: ", mean(u,dims=2))
-        
+
     end
+
+    diff = ekp.obs_mean .- g[:,successful_ens]
+    X = ekp.obs_noise_cov \ diff # diff: column vector
+    newerr = 1/size(diff)[2]*dot(diff, X)
+    println("loss function", newerr)
         
     # store new parameters (and model outputs)
     push!(ekp.u, DataContainer(u, data_are_columns = true))
